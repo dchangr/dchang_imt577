@@ -1,0 +1,99 @@
+/************************************************
+Course: IMT 577
+Instructor: Janak Rajani
+7.11 Create Fact Tables & Load Data 
+Date: 8/7/2022
+************************************************/
+
+/*************************
+Create fact tables
+*************************/
+
+create or replace table fact_salesactual (
+    dimproductid integer constraint fk_dimproductid foreign key references dim_product(dimproductid)
+    ,dimstoreid integer constraint fk_dimstoreid foreign key references dim_store(dimstoreid)
+    ,dimresellerid integer constraint fk_dimresellerid foreign key references dim_reseller(dimresellerid)
+    ,dimcustomerid integer constraint fk_dimcustomerid foreign key references dim_customer(dimcustomerid)
+    ,dimchannelid integer constraint fk_dimchannelid foreign key references dim_channel(dimchannelid)
+    ,dimsaledateid varchar(255) constraint fk_dimsaledateid foreign key references dim_date(date_pkey)
+    ,dimlocationid integer constraint fk_dimlocationid foreign key references dim_location(dimlocationid)
+    ,salesheaderid integer 
+    ,salesdetailid integer
+    ,saleamount float
+    ,salequantity integer 
+    ,saleunitprice float 
+    ,saleextendedcost float 
+    ,saletotalprofit float 
+)
+;
+
+create or replace table fact_srcsalestarget (
+    dimstoreid integer constraint fk_dimstoreid foreign key references dim_store(dimstoreid)
+    ,dimresellerid integer constraint fk_dimresellerid foreign key references dim_reseller(dimresellerid)
+    ,dimchannelid integer constraint fk_dimchannelid foreign key references dim_channel(dimchannelid)
+    ,dimtargetdateid varchar(255) constraint fk_dimtargetdateid foreign key references dim_date(date_pkey)
+    ,salestargetamount integer 
+)
+;
+
+create or replace table fact_productsalestarget (
+    dimproductid integer constraint fk_dimproductid foreign key references dim_product(dimproductid)
+    ,dimtargetdateid varchar(255) constraint fk_dimtargetdateid foreign key references dim_date(date_pkey)
+    ,producttargetsalesquantity integer
+)
+;
+
+/*************************
+Load fact tables
+*************************/
+
+insert into fact_salesactual
+select dp.dimproductid 
+    ,coalesce(ds.dimstoreid, -1) as dimstoreid
+    ,coalesce(dr.dimresellerid, -1) as dimresellerid
+    ,coalesce(dc.dimcustomerid, -1) dimcustomerid
+    ,dch.dimchannelid
+    ,dd.date_pkey as dimsalesdateid
+    ,dl.dimlocationid
+    ,ssh.salesheaderid
+    ,ssd.salesdetailid
+    ,ssd.salesamount as saleamount 
+    ,ssd.salesquantity as salequantity 
+    ,dp.productretailprice as saleunitprice 
+    ,dp.productcost * ssd.salesquantity as saleextendedcost 
+    ,dp.productretailprofit * ssd.salesquantity as saletotalprofit 
+from stage_salesdetail ssd 
+    join stage_salesheader ssh on ssd.salesheaderid = ssh.salesheaderid
+    join dim_product dp on ssd.productid = dp.dimproductid
+    left join dim_store ds on ssh.storeid = ds.sourcestoreid
+    left join dim_reseller dr on ssh.resellerid = dr.resellerid
+    left join dim_customer dc on ssh.customerid = dc.customerid
+    left join dim_channel dch on ssh.channelid = dch.channelid
+        and channelcategory = 'Direct' -- removes duplicate channelids
+    left join dim_date dd on ssh.date = dd.date
+    left join dim_location dl on ssh.storeid::varchar(255) = dl.locationid 
+        or ssh.customerid = dl.locationid 
+        or ssh.resellerid = dl.locationid
+;
+
+insert into fact_srcsalestarget
+select coalesce(ds.dimstoreid, -1) as dimstoreid
+    ,coalesce(dr.dimresellerid, -1) as dimresellerid
+    ,dc.dimchannelid
+    ,dd.date_pkey as dimtargetdateid
+    ,ssrc.targetsalesamount / 365 as salestargetamount -- annual amount divided by days in year
+from stage_targetdatachannelresellerandstore ssrc
+    left join dim_store ds on ssrc.targetname = ds.storename
+    left join dim_reseller dr on ssrc.targetname = dr.resellername
+    join dim_channel dc on ssrc.channelname = dc.channelname
+    join dim_date dd on ssrc.year = year(dd.date) 
+;
+
+insert into fact_productsalestarget 
+select dp.dimproductid
+    ,dd.date_pkey as dimtargetdateid
+    ,stdp.salesquantitytarget / 365 as producttargetsalesquantity -- annual amount divided by days in year
+from stage_targetdataproduct stdp
+    join dim_product dp on stdp.productid = dp.productid
+    join dim_date dd on stdp.year = year(dd.date)
+;
